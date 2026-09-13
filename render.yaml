@@ -1,0 +1,44 @@
+envVarGroups:
+  - name: shared-secrets
+    envVars:
+      - key: GATEWAY_SECRET
+        generateValue: true
+
+services:
+  - type: web
+    name: dadtvplay-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt && python train_classifier.py
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - fromGroup: shared-secrets
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: YAPE_NUMBER
+        sync: false
+      - key: YAPE_NAME
+        sync: false
+      - key: GATEWAY_URL
+        fromService:
+          name: dadtvplay-gateway
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
+  - type: web
+    name: dadtvplay-gateway
+    runtime: node
+    rootDir: whatsapp-gateway
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - fromGroup: shared-secrets
+      - key: BACKEND_URL
+        fromService:
+          name: dadtvplay-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
