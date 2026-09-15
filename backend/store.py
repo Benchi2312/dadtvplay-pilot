@@ -14,7 +14,7 @@ def find_available_product(text: str):
     completo — bug real detectado en pruebas ("quiero hbo" ofrecía Disney+).
     """
     result = supabase.table("products").select("*").eq("active", True).gt("stock", 0).execute()
-    products = result.data or []
+    products = result.data if result else []
     if not products:
         return None
 
@@ -38,8 +38,11 @@ def log_conversation(customer_phone: str, incoming_message: str, intent: str, re
 
 
 def get_conversation_state(phone: str):
+    # NOTA: supabase-py puede devolver None directamente (no un objeto con
+    # .data=None) cuando maybe_single() no encuentra filas. Por eso
+    # chequeamos "result" antes de acceder a ".data".
     result = supabase.table("conversation_state").select("*").eq("phone", phone).maybe_single().execute()
-    data = result.data
+    data = result.data if result else None
     if not data:
         return None
     updated_at = data.get("updated_at")

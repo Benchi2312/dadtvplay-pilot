@@ -1,6 +1,5 @@
 node_modules/
 __pycache__/
 *.pyc
-whatsapp-gateway/auth_state/
 backend/model.pkl
 .env
