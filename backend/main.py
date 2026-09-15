@@ -1,10 +1,9 @@
 import asyncio
 import time
-import httpx
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
 
-from config import GATEWAY_URL, GATEWAY_SECRET, DEBOUNCE_SECONDS
+from config import DEBOUNCE_SECONDS, KAPSO_WEBHOOK_SECRET
+from kapso_client import send_whatsapp_message
 from classifier import classify_intent
 from responder import build_reply, build_confirmation_reply, build_rejection_reply, build_attachment_reply
 from store import log_conversation, find_available_product, get_conversation_state, set_conversation_state
@@ -26,40 +25,56 @@ _last_activity: dict[str, float] = {}
 MAX_DELAY_SECONDS = 30 * 60
 
 
-class IncomingMessage(BaseModel):
-    phone: str
-    message: str | None = None
-    attachment: bool = False
-    timestamp: float | None = None
-
-
 @app.get("/health")
 def health():
     return {"ok": True}
 
 
-@app.post("/webhook/incoming")
-async def incoming(msg: IncomingMessage, request: Request):
-    secret = request.headers.get("x-gateway-secret")
-    if secret != GATEWAY_SECRET:
+@app.post("/webhook/kapso")
+async def kapso_webhook(request: Request):
+    # Verificación simple por secreto compartido en query param, como
+    # hacíamos con HOOK_TOKEN en la versión de WaMundo. Si Kapso firma los
+    # webhooks con HMAC (X-Hub-Signature-256 u otro header), lo agregamos
+    # después de confirmar el header exacto con un webhook real de prueba
+    # — no lo inventamos a ciegas.
+    secret = request.query_params.get("secret")
+    if secret != KAPSO_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="unauthorized")
 
-    if not msg.message and not msg.attachment:
+    body = await request.json()
+    print("Webhook crudo de Kapso/Meta:", body)  # TEMPORAL: para confirmar el formato real, quitar después
+
+    try:
+        entry = body["entry"][0]
+        change = entry["changes"][0]
+        value = change["value"]
+        messages = value.get("messages", [])
+    except (KeyError, IndexError):
+        # Puede ser un evento de "status" (entregado/leído), no un mensaje nuevo.
         return {"ok": True, "ignored": True}
 
-    phone = msg.phone
-    if msg.message:
-        _pending.setdefault(phone, []).append(msg.message)
-    if msg.attachment:
-        _has_attachment[phone] = True
-    _last_activity[phone] = msg.timestamp or time.time()
+    for m in messages:
+        phone = m.get("from")
+        msg_type = m.get("type")
+        text = m.get("text", {}).get("body") if msg_type == "text" else None
+        has_attachment = msg_type in ("image", "audio", "video", "document", "sticker")
 
-    existing = _debounce_tasks.get(phone)
-    if existing and not existing.done():
-        existing.cancel()
+        if not phone or (not text and not has_attachment):
+            continue
 
-    _debounce_tasks[phone] = asyncio.create_task(_flush_after_silence(phone))
-    return {"ok": True, "queued": True}
+        _pending.setdefault(phone, [])
+        if text:
+            _pending[phone].append(text)
+        if has_attachment:
+            _has_attachment[phone] = True
+        _last_activity[phone] = time.time()
+
+        existing = _debounce_tasks.get(phone)
+        if existing and not existing.done():
+            existing.cancel()
+        _debounce_tasks[phone] = asyncio.create_task(_flush_after_silence(phone))
+
+    return {"ok": True}
 
 
 async def _flush_after_silence(phone: str):
@@ -126,13 +141,4 @@ async def _flush_after_silence(phone: str):
 
 
 async def _send_whatsapp(phone: str, message: str):
-    async with httpx.AsyncClient(timeout=15) as client:
-        try:
-            res = await client.post(
-                f"{GATEWAY_URL}/send",
-                headers={"x-gateway-secret": GATEWAY_SECRET},
-                json={"phone": phone, "message": message},
-            )
-            print(f"Envío a {phone}: {res.status_code} {res.text}")
-        except Exception as e:
-            print(f"Error enviando a {phone}: {e}")
+    await send_whatsapp_message(phone, message)
