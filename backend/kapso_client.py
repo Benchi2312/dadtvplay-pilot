@@ -6,7 +6,7 @@ socket persistente que mantener.
 import httpx
 from config import KAPSO_API_KEY, KAPSO_PHONE_NUMBER_ID
 
-BASE_URL = f"https://api.kapso.ai/meta/whatsapp/{KAPSO_PHONE_NUMBER_ID}/messages"
+BASE_URL = f"https://api.kapso.ai/meta/whatsapp/v24.0/{KAPSO_PHONE_NUMBER_ID}/messages"
 
 
 async def send_whatsapp_message(to: str, body: str) -> dict:
