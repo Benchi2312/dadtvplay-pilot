@@ -54,7 +54,7 @@ async def kapso_webhook(request: Request):
         return {"ok": True, "ignored": True}
 
     for m in messages:
-        phone = m.get("from")
+        phone = m.get("from") or m.get("from_user_id")
         msg_type = m.get("type")
         text = m.get("text", {}).get("body") if msg_type == "text" else None
         has_attachment = msg_type in ("image", "audio", "video", "document", "sticker")

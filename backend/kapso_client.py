@@ -10,23 +10,22 @@ BASE_URL = f"https://api.kapso.ai/meta/whatsapp/{KAPSO_PHONE_NUMBER_ID}/messages
 
 
 async def send_whatsapp_message(to: str, body: str) -> dict:
-    """Envía un mensaje de texto libre. Solo funciona dentro de la ventana
-    de 24h desde el último mensaje del cliente (igual que la Cloud API
-    normal de Meta — Kapso no cambia esa regla, solo simplifica la auth)."""
     payload = {
         "messaging_product": "whatsapp",
-        "to": to,
         "type": "text",
         "text": {"body": body},
     }
+    if "." in to:
+        payload["recipient_type"] = "individual"
+        payload["recipient"] = to
+    else:
+        payload["to"] = to
+
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             res = await client.post(
                 BASE_URL,
-                headers={
-                    "X-API-Key": KAPSO_API_KEY,
-                    "Content-Type": "application/json",
-                },
+                headers={"X-API-Key": KAPSO_API_KEY, "Content-Type": "application/json"},
                 json=payload,
             )
             print(f"Envío a {to}: {res.status_code} {res.text}")
