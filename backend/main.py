@@ -28,7 +28,7 @@ _processed_message_ids: set[str] = set()
 _contact_names: dict[str, str] = {}
 
 MAX_DELAY_SECONDS = 30 * 60
-PAYMENT_FOLLOWUP_HINTS = ["yape", "numero", "número", "pago", "plin", "cuenta"]
+PAYMENT_FOLLOWUP_HINTS = ["yape", "numero", "número", "pago", "plin", "cuenta", "qr"]
 
 
 @app.get("/health")
@@ -140,6 +140,12 @@ async def _flush_after_silence(phone: str):
             intent = "spam"
             reply = build_rejection_reply()
             set_conversation_state(phone, "idle", None)
+        else:
+            # No está claro si es sí o no (ej. "Sii", "sip", "va pe", un
+            # emoji suelto). NO tocamos el estado — sigue esperando
+            # confirmación, para no perder el contexto de la compra.
+            intent = "pedido"
+            reply = "Disculpa, ¿eso es un sí? 🙂 Solo necesito que confirmes y te paso los datos del pago."
 
     if pending_state and pending_state.get("state") == "confirmed" and combined:
         t_norm = normalize(combined)
