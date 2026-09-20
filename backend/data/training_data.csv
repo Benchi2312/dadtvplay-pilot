@@ -67,6 +67,16 @@ me interesa el paquete completo,pedido
 tienen promocion de netflix,pedido
 quiero saber el precio de disney,pedido
 necesito renovar ya,pedido
+venden hbo?,pedido
+venden netflix?,pedido
+venden disney?,pedido
+venden prime video?,pedido
+tienen hbo disponible?,pedido
+tienen netflix disponible?,pedido
+hay cuentas de disney?,pedido
+hay stock de hbo max?,pedido
+manejan netflix?,pedido
+ofrecen disney plus?,pedido
 no funciona mi cuenta,reclamo
 no puedo entrar a netflix,reclamo
 se cerro la sesion sola,reclamo
@@ -124,6 +134,11 @@ eres un huevon,ofensivo
 esto es una mierda de negocio,ofensivo
 malparido devuelveme mi plata,ofensivo
 no seas imbecil respondeme,ofensivo
+ya pe no jodas,ofensivo
+que weba de servicio,ofensivo
+puros choros,ofensivo
+me estan viendo la cara,ofensivo
+esto es un robo,ofensivo
 jaja,spam
 ok,spam
 👍,spam
@@ -140,6 +155,16 @@ test,spam
 ya,spam
 vale,spam
 👌,spam
+mmm,spam
+jeje,spam
+k,spam
+no c,spam
+aja,spam
+mmju,spam
+klk,spam
+ajaja,spam
+no entendi,spam
+no c bro,spam
 netflix tiene plan con anuncios?,consulta
 cual es la diferencia entre disney plus estandar y premium,consulta
 el plan basico de hbo max trae publicidad,consulta

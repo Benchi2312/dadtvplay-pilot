@@ -18,11 +18,13 @@ def classify_intent(text: str) -> dict:
     proba = float(_model.predict_proba([norm]).max())
 
     mentions_platform = any(p in norm for p in KNOWN_PLATFORMS)
-    # Solo reforzamos spam->pedido (mensaje ambiguo/corto con plataforma
-    # mencionada). NO reforzamos consulta->pedido: una pregunta real sobre
-    # una plataforma ("qué planes tiene netflix?") debe quedarse en
-    # consulta, no forzarse a pedido solo por mencionar el nombre.
-    if mentions_platform and intent == "spam" and proba < 0.6:
+    # Regla estructural, sin importar la confianza del modelo: si se nombra
+    # una plataforma de tu catálogo, nunca puede ser "fuera de tema" ni
+    # "spam" — como mínimo es una consulta sobre ese producto.
+    # NO reforzamos consulta->pedido: una pregunta real sobre una plataforma
+    # ("qué planes tiene netflix?") debe quedarse en consulta, no forzarse a
+    # pedido solo por mencionar el nombre.
+    if mentions_platform and intent in ("spam", "fuera_de_tema"):
         intent = "pedido"
 
     return {"intent": intent, "confidence": proba}

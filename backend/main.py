@@ -3,8 +3,8 @@ import time
 from fastapi import FastAPI, HTTPException, Request
 
 from config import DEBOUNCE_SECONDS, KAPSO_WEBHOOK_SECRET
-from kapso_client import send_whatsapp_message
-from classifier import classify_intent
+from kapso_client import send_whatsapp_message, send_platform_list
+from classifier import classify_intent, normalize
 from responder import build_reply, build_confirmation_reply, build_rejection_reply, build_attachment_reply
 from store import log_conversation, find_available_product, get_conversation_state, set_conversation_state
 from confirmation import is_real_affirmative, is_real_negative
@@ -21,8 +21,14 @@ _pending: dict[str, list[str]] = {}
 _has_attachment: dict[str, bool] = {}
 _debounce_tasks: dict[str, asyncio.Task] = {}
 _last_activity: dict[str, float] = {}
+# IDs de mensajes de WhatsApp ya procesados, para descartar reintentos
+# del webhook (ej. si Render tardó en despertar y Kapso reintentó).
+_processed_message_ids: set[str] = set()
+# Nombres de contacto según el número de WhatsApp (vienen en cada webhook).
+_contact_names: dict[str, str] = {}
 
 MAX_DELAY_SECONDS = 30 * 60
+PAYMENT_FOLLOWUP_HINTS = ["yape", "numero", "número", "pago", "plin", "cuenta"]
 
 
 @app.get("/health")
@@ -49,15 +55,36 @@ async def kapso_webhook(request: Request):
         change = entry["changes"][0]
         value = change["value"]
         messages = value.get("messages", [])
+        contacts = value.get("contacts", [])
     except (KeyError, IndexError):
         # Puede ser un evento de "status" (entregado/leído), no un mensaje nuevo.
         return {"ok": True, "ignored": True}
 
     for m in messages:
         phone = m.get("from") or m.get("from_user_id")
+        if contacts:
+            name = contacts[0].get("profile", {}).get("name")
+            if name:
+                _contact_names[phone] = name
+
         msg_type = m.get("type")
-        text = m.get("text", {}).get("body") if msg_type == "text" else None
+        if msg_type == "text":
+            text = m.get("text", {}).get("body")
+        elif msg_type == "interactive":
+            interactive = m.get("interactive", {})
+            selection = interactive.get("list_reply") or interactive.get("button_reply")
+            text = selection.get("title") if selection else None
+        else:
+            text = None
         has_attachment = msg_type in ("image", "audio", "video", "document", "sticker")
+
+        msg_id = m.get("id")
+        if msg_id:
+            if msg_id in _processed_message_ids:
+                continue  # reintento del webhook, ya lo procesamos
+            _processed_message_ids.add(msg_id)
+            if len(_processed_message_ids) > 10_000:
+                _processed_message_ids.clear()
 
         if not phone or (not text and not has_attachment):
             continue
@@ -108,16 +135,29 @@ async def _flush_after_silence(phone: str):
                 product = res.data if res else None
             intent = "pedido"
             reply = build_confirmation_reply(product)
-            set_conversation_state(phone, "idle", None)
+            set_conversation_state(phone, "confirmed", product_id)
         elif is_real_negative(combined):
             intent = "spam"
             reply = build_rejection_reply()
             set_conversation_state(phone, "idle", None)
 
+    if pending_state and pending_state.get("state") == "confirmed" and combined:
+        t_norm = normalize(combined)
+        if any(h in t_norm for h in PAYMENT_FOLLOWUP_HINTS):
+            product_id = pending_state.get("pending_product_id")
+            product = None
+            if product_id:
+                from store import supabase
+                res = supabase.table("products").select("*").eq("id", product_id).maybe_single().execute()
+                product = res.data if res else None
+            intent = "pedido"
+            reply = build_confirmation_reply(product)
+
     if reply is None and combined:
         result = classify_intent(combined)
         intent = result["intent"]
-        reply = build_reply(intent, combined, is_delayed)
+        name = _contact_names.get(phone)
+        reply = build_reply(intent, combined, is_delayed, name=name)
 
         if intent == "pedido":
             product = find_available_product(combined)
@@ -136,7 +176,15 @@ async def _flush_after_silence(phone: str):
     if reply is None:
         return
 
-    await _send_whatsapp(phone, reply)
+    if intent == "consulta":
+        from store import get_available_platforms
+        platforms = get_available_platforms()
+        if platforms:
+            await send_platform_list(phone, reply, platforms)
+        else:
+            await _send_whatsapp(phone, reply)
+    else:
+        await _send_whatsapp(phone, reply)
     log_conversation(phone, combined or "[adjunto]", intent, reply, 1.0)
 
 

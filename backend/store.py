@@ -28,6 +28,12 @@ def find_available_product(text: str):
     return products[0]
 
 
+def get_available_platforms() -> list[str]:
+    result = supabase.table("products").select("platform").eq("active", True).gt("stock", 0).execute()
+    data = result.data if result else []
+    return sorted(set(p["platform"] for p in data))
+
+
 def log_conversation(customer_phone: str, incoming_message: str, intent: str, reply_message: str, confidence: float):
     supabase.table("conversation_log").insert({
         "customer_phone": customer_phone,
