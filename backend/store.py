@@ -28,6 +28,23 @@ def find_available_product(text: str):
     return products[0]
 
 
+def find_products_for_platforms(platform_keywords: list[str]):
+    """Dado un listado de palabras clave de plataforma ya detectadas en el
+    mensaje, devuelve TODOS los productos que coinciden (sin duplicados).
+    Sirve para detectar cuando el cliente menciona más de una plataforma
+    en el mismo mensaje."""
+    result = supabase.table("products").select("*").eq("active", True).gt("stock", 0).execute()
+    products = result.data if result else []
+    seen_ids = set()
+    matches = []
+    for kw in platform_keywords:
+        for p in products:
+            if kw in normalize(str(p["platform"])) and p["id"] not in seen_ids:
+                matches.append(p)
+                seen_ids.add(p["id"])
+    return matches
+
+
 def get_available_platforms() -> list[str]:
     result = supabase.table("products").select("platform").eq("active", True).gt("stock", 0).execute()
     data = result.data if result else []
