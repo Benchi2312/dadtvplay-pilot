@@ -47,6 +47,19 @@ SPAM_VARIANTS = [
 ]
 
 
+def build_offer_reply(product: dict | None, is_delayed: bool = False) -> str:
+    """Oferta de un producto ya resuelto (no se re-busca por texto). ¿Casos
+    donde el cliente eligió por plan/precio ("Standar", "de 15.6 soles")
+    y el texto no menciona la plataforma?"""
+    prefix = "Disculpa la demora en responder 🙏. " if is_delayed else ""
+    if not product:
+        return f"{prefix}Por ahora no tenemos stock disponible de ese producto. ¿Quieres que te avisemos cuando vuelva a haber?"
+    return (
+        f"{prefix}Sí tenemos disponible *{product['platform']} - {product['plan_name']}* "
+        f"a S/{product['price']:.2f}. ¿Confirmamos? Te paso el link de pago por Yape/Plin."
+    )
+
+
 def build_reply(intent: str, text: str, is_delayed: bool = False, name: str | None = None) -> str:
     prefix = "Disculpa la demora en responder 🙏. " if is_delayed else ""
     greet = _greet(name)
@@ -58,13 +71,7 @@ def build_reply(intent: str, text: str, is_delayed: bool = False, name: str | No
         return prefix + random.choice(RECLAMO_VARIANTS)
 
     if intent == "pedido":
-        product = find_available_product(text)
-        if not product:
-            return f"{prefix}Por ahora no tenemos stock disponible de ese producto. ¿Quieres que te avisemos cuando vuelva a haber?"
-        return (
-            f"{prefix}Sí tenemos disponible *{product['platform']} - {product['plan_name']}* "
-            f"a S/{product['price']}. ¿Confirmamos? Te paso el link de pago por Yape/Plin."
-        )
+        return build_offer_reply(find_available_product(text), is_delayed)
 
     if intent == "consulta":
         return prefix + random.choice(CONSULTA_VARIANTS).format(greet=greet)
@@ -75,13 +82,27 @@ def build_reply(intent: str, text: str, is_delayed: bool = False, name: str | No
     return prefix + random.choice(SPAM_VARIANTS)
 
 
-def build_confirmation_reply(product: dict | None) -> str:
-    if not product:
+def build_confirmation_reply(products) -> str:
+    if isinstance(products, dict):
+        products = [products]
+    products = [p for p in (products or []) if p]
+    if not products:
         return "Uy, ese producto ya no está disponible 😕. ¿Quieres que te muestre otras opciones?"
+
+    if len(products) == 1:
+        p = products[0]
+        return (
+            f"¡Perfecto! Tu pedido de *{p['platform']} - {p['plan_name']}* "
+            f"por S/{p['price']:.2f} quedó confirmado. Yapea al *{YAPE_NUMBER}* ({YAPE_NAME}) "
+            "y mándame la captura del pago para activarte la cuenta 🙌."
+        )
+
+    lines = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']:.2f}" for p in products)
+    total = sum(float(p["price"]) for p in products)
     return (
-        f"¡Perfecto! Tu pedido de *{product['platform']} - {product['plan_name']}* "
-        f"por S/{product['price']} quedó confirmado. Yapea al *{YAPE_NUMBER}* ({YAPE_NAME}) "
-        "y mándame la captura del pago para activarte la cuenta 🙌."
+        f"¡Perfecto! Te confirmo estos productos 😊:\n{lines}\n"
+        f"*Total: S/{total:.2f}*. Yapea al *{YAPE_NUMBER}* ({YAPE_NAME}) "
+        "y mándame la captura del pago para activarte las cuentas 🙌."
     )
 
 

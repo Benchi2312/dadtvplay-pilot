@@ -38,8 +38,15 @@ create table if not exists conversation_state (
   phone text primary key,
   state text not null default 'idle',
   pending_product_id bigint references products(id),
+  -- NUEVO: candidatas ofrecidas al cliente cuando hay varias opciones
+  -- (multi-plan o multi-plataforma). Se conserva hasta que elige.
+  pending_product_ids bigint[],
   updated_at timestamptz not null default now()
 );
+
+-- Si la tabla ya existía (piloto anterior), agrega la columna nueva sin
+-- romper nada:
+alter table conversation_state add column if not exists pending_product_ids bigint[];
 
 alter table conversation_state enable row level security;
 drop policy if exists "Cualquiera puede leer/editar estado (piloto)" on conversation_state;
