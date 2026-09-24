@@ -20,9 +20,9 @@ def _greet(name: str | None) -> str:
 
 
 CONSULTA_VARIANTS = [
-    "{greet}! 👋 Vendemos cuentas de Netflix, Disney+, HBO Max y Prime Video. ¿Cuál te interesa?",
-    "{greet}, un gusto saludarte 😊. Manejamos Netflix, Disney+, HBO Max y Prime Video — ¿alguna te llama la atención?",
-    "{greet}! Aquí tienes cuentas de streaming: Netflix, Disney+, HBO Max y Prime Video. ¿Con cuál te ayudo?",
+    "{greet}! 👋 Tenemos varias plataformas de streaming disponibles. ¿Cuál te interesa?",
+    "{greet}, un gusto saludarte 😊. Mira las opciones que tenemos disponibles ahí abajo 👇",
+    "{greet}! Aquí tienes nuestro catálogo de streaming. ¿Con cuál te ayudo?",
 ]
 
 RECLAMO_VARIANTS = [

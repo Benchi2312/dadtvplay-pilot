@@ -3,7 +3,10 @@ import joblib
 
 _model = joblib.load("model.pkl")
 
-KNOWN_PLATFORMS = ["netflix", "disney", "hbo", "max", "prime", "spotify", "star"]
+KNOWN_PLATFORMS = [
+    "netflix", "disney", "hbo", "max", "prime", "video",
+    "paramount", "crunchyroll", "dgo", "iptv", "apple tv",
+]
 
 
 def normalize(text: str) -> str:

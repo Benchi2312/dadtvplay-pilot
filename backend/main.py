@@ -5,9 +5,9 @@ from fastapi import FastAPI, HTTPException, Request
 
 from config import DEBOUNCE_SECONDS, KAPSO_WEBHOOK_SECRET
 from kapso_client import send_whatsapp_message, send_platform_list
-from classifier import classify_intent, normalize, KNOWN_PLATFORMS
+from classifier import classify_intent, normalize
 from responder import build_reply, build_confirmation_reply, build_rejection_reply, build_attachment_reply
-from store import log_conversation, find_available_product, get_conversation_state, set_conversation_state, find_products_for_platforms
+from store import log_conversation, find_available_product, get_conversation_state, set_conversation_state, find_matching_products
 from confirmation import is_real_affirmative, is_real_negative
 
 app = FastAPI(title="Backend del agente de WhatsApp")
@@ -159,31 +159,18 @@ async def _flush_after_silence(phone: str):
             set_conversation_state(phone, "idle", None)
         else:
             t_check = normalize(combined)
-            mentioned_platforms = [p for p in KNOWN_PLATFORMS if p in t_check]
-            if len(mentioned_platforms) > 1:
-                # CASO 2: pidió más de una plataforma en el mismo mensaje.
-                matched = find_products_for_platforms(mentioned_platforms)
-                if len(matched) > 1:
-                    options = "\n".join(f"- {p['platform']} ({p['plan_name']}): S/{p['price']}" for p in matched)
-                    intent = "pedido"
-                    reply = f"Veo que te interesa más de uno 😊. Estas son las opciones:\n{options}\n¿Cuál confirmamos primero?"
-                    set_conversation_state(phone, "idle", None)
-                elif matched:
-                    intent = "pedido"
-                    product = matched[0]
-                    reply = build_reply("pedido", combined, is_delayed)
-                    set_conversation_state(phone, "awaiting_confirmation", product["id"])
-            elif mentioned_platforms:
-                # Mención de UNA plataforma distinta: cambio de producto.
+            matched = find_matching_products(combined)
+            if len(matched) > 1:
+                options = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']}" for p in matched)
                 intent = "pedido"
-                product = find_available_product(combined)
+                reply = f"Tienes más de una opción disponible 😊:\n{options}\n¿Cuál te gustaría?"
+                set_conversation_state(phone, "idle", None)
+            elif len(matched) == 1:
+                product = matched[0]
+                intent = "pedido"
                 reply = build_reply("pedido", combined, is_delayed)
-                if product:
-                    set_conversation_state(phone, "awaiting_confirmation", product["id"])
-                else:
-                    set_conversation_state(phone, "idle", None)
+                set_conversation_state(phone, "awaiting_confirmation", product["id"])
             else:
-                # Genuinamente ambiguo (ej. "Sii", "sip", emoji suelto).
                 intent = "pedido"
                 reply = "Disculpa, ¿eso es un sí? 🙂 Solo necesito que confirmes y te paso los datos del pago."
 
@@ -204,16 +191,18 @@ async def _flush_after_silence(phone: str):
             # después de ya haber confirmado otro? Detectamos mención de
             # plataforma y, si la hay, tratamos esto como un pedido nuevo
             # que reemplaza al anterior.
-            mentioned_platform = next((p for p in KNOWN_PLATFORMS if p in t_norm), None)
-            if mentioned_platform:
+            matched = find_matching_products(combined)
+            if len(matched) == 1:
                 intent = "pedido"
-                product = find_available_product(combined)
+                product = matched[0]
                 reply = build_reply("pedido", combined, is_delayed)
-                if product:
-                    set_conversation_state(phone, "awaiting_confirmation", product["id"])
-                else:
-                    set_conversation_state(phone, "idle", None)
-            # Si no menciona plataforma ni es sobre el pago, dejamos
+                set_conversation_state(phone, "awaiting_confirmation", product["id"])
+            elif len(matched) > 1:
+                options = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']}" for p in matched)
+                intent = "pedido"
+                reply = f"Tienes más de una opción disponible 😊:\n{options}\n¿Cuál te gustaría?"
+                set_conversation_state(phone, "idle", None)
+            # Si no hay match (0) ni es sobre el pago, dejamos
             # "reply" en None: cae a la clasificación genérica de abajo,
             # que ya NO borra el estado "confirmed" por mensajes sin
             # relación (fix anterior).
@@ -225,28 +214,18 @@ async def _flush_after_silence(phone: str):
         name = _contact_names.get(phone)
 
         if intent == "pedido":
-            t_norm_multi = normalize(combined)
-            mentioned_platforms = [p for p in KNOWN_PLATFORMS if p in t_norm_multi]
-            if len(mentioned_platforms) > 1:
-                matched = find_products_for_platforms(mentioned_platforms)
-                if len(matched) > 1:
-                    options = "\n".join(f"- {p['platform']} ({p['plan_name']}): S/{p['price']}" for p in matched)
-                    reply = f"Veo que te interesa más de uno 😊. Estas son las opciones:\n{options}\n¿Cuál confirmamos primero?"
-                    set_conversation_state(phone, "idle", None)
-                else:
-                    reply = build_reply(intent, combined, is_delayed, name=name)
-                    product = find_available_product(combined)
-                    if product:
-                        set_conversation_state(phone, "awaiting_confirmation", product["id"])
-                    else:
-                        set_conversation_state(phone, "idle", None)
+            matched = find_matching_products(combined)
+            if len(matched) > 1:
+                options = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']}" for p in matched)
+                reply = f"Tienes más de una opción disponible 😊:\n{options}\n¿Cuál te gustaría?"
+                set_conversation_state(phone, "idle", None)
+            elif len(matched) == 1:
+                reply = build_reply(intent, combined, is_delayed, name=name)
+                product = matched[0]
+                set_conversation_state(phone, "awaiting_confirmation", product["id"])
             else:
                 reply = build_reply(intent, combined, is_delayed, name=name)
-                product = find_available_product(combined)
-                if product:
-                    set_conversation_state(phone, "awaiting_confirmation", product["id"])
-                else:
-                    set_conversation_state(phone, "idle", None)
+                set_conversation_state(phone, "idle", None)
         else:
             reply = build_reply(intent, combined, is_delayed, name=name)
             if not (pending_state and pending_state.get("state") == "confirmed"):

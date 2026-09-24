@@ -6,43 +6,40 @@ import time
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def find_available_product(text: str):
-    """Busca la PLATAFORMA mencionada en el mensaje (palabra clave corta,
-    ej. 'hbo'), y luego el producto cuyo nombre la contenga (ej. 'HBO Max').
-    Antes se hacía al revés (buscar el nombre completo del producto dentro
-    del mensaje), lo que fallaba si el cliente no escribía el nombre
-    completo — bug real detectado en pruebas ("quiero hbo" ofrecía Disney+).
-    """
+def find_matching_products(text: str) -> list[dict]:
+    """Devuelve TODOS los productos activos con stock que coinciden con
+    alguna plataforma mencionada en el texto — puede ser más de uno si:
+    (a) el cliente menciona varias plataformas, o
+    (b) menciona una plataforma que tiene varios planes (ej. Disney
+    Standar y Premium, o Hbo Max Estándar y Platino).
+    Quien llama esta función decide si hay que pedir que elija uno."""
     result = supabase.table("products").select("*").eq("active", True).gt("stock", 0).execute()
     products = result.data if result else []
     if not products:
-        return None
+        return []
 
     norm = normalize(text)
-    mentioned = next((p for p in KNOWN_PLATFORMS if p in norm), None)
-    if mentioned:
-        match = next((p for p in products if mentioned in normalize(str(p["platform"]))), None)
-        if match:
-            return match
+    mentioned = [p for p in KNOWN_PLATFORMS if p in norm]
+    if not mentioned:
+        return []
 
-    return products[0]
-
-
-def find_products_for_platforms(platform_keywords: list[str]):
-    """Dado un listado de palabras clave de plataforma ya detectadas en el
-    mensaje, devuelve TODOS los productos que coinciden (sin duplicados).
-    Sirve para detectar cuando el cliente menciona más de una plataforma
-    en el mismo mensaje."""
-    result = supabase.table("products").select("*").eq("active", True).gt("stock", 0).execute()
-    products = result.data if result else []
     seen_ids = set()
     matches = []
-    for kw in platform_keywords:
+    for kw in mentioned:
         for p in products:
             if kw in normalize(str(p["platform"])) and p["id"] not in seen_ids:
                 matches.append(p)
                 seen_ids.add(p["id"])
     return matches
+
+
+def find_available_product(text: str):
+    """Compatibilidad hacia atrás: si hay exactamente un match, lo
+    devuelve. Si hay ambigüedad (0 o varios), devuelve None — quien
+    llama debe usar find_matching_products directamente si quiere
+    manejar la ambigüedad en vez de solo el caso simple."""
+    matches = find_matching_products(text)
+    return matches[0] if len(matches) == 1 else None
 
 
 def get_available_platforms() -> list[str]:
