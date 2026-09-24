@@ -312,19 +312,19 @@ async def _flush_after_silence_inner(phone: str):
             set_conversation_state(phone, "idle", None)
             reply = None
         elif _SELECT_ALL_RE.search(normalize(combined)):
-            # "los 2" / "ambos" / "todos": quiere TODAS las opciones listadas.
-            unique_platforms = {p["platform"] for p in candidates}
-            if len(unique_platforms) == len(candidates):
-                # Cada opción es de una plataforma distinta -> armar el conjunto.
+            # "los 2" / "las dos" / "ambos" / "todos": quiere TODAS las
+            # opciones listadas (incluso 2 planes de la misma plataforma,
+            # ej. "los 2" sobre [Disney Standar, Disney Premium]).
+            if is_real_affirmative(combined):
+                # "si ambos porfa" -> confirmación directa del conjunto.
+                intent = "pedido"
+                reply = build_confirmation_reply(candidates)
+                set_conversation_state(phone, "confirmed", candidates[0]["id"], [p["id"] for p in candidates])
+            else:
+                # Sin afirmación previa: ofrecemos el conjunto para confirmar.
                 intent = "pedido"
                 reply = _multi_order_reply(candidates)
                 set_conversation_state(phone, "awaiting_confirmation", candidates[0]["id"], [p["id"] for p in candidates])
-            else:
-                # Misma plataforma con varias opciones: "todos" es ambiguo
-                # (¿ambos planes?). Mejor re-listar.
-                intent = "pedido"
-                reply = _options_reply(candidates, "Perfecto, tengo varias opciones para eso 😊:")
-                set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in candidates])
         elif is_real_affirmative(combined):
             # "Sí" sobre una lista ya reducida a productos concretos
             # (cada plataforma aparece una sola vez) = confirmar el conjunto.
@@ -392,7 +392,11 @@ async def _flush_after_silence_inner(phone: str):
             # que reemplaza al anterior.
             matched = find_matching_products(combined)
             picked, all_specific = resolve_selection(combined, matched)
-            if len(picked) == 1:
+            if len(picked) > 1 and all_specific and _is_multi_specific(picked, combined):
+                intent = "pedido"
+                reply = _multi_order_reply(picked)
+                set_conversation_state(phone, "awaiting_confirmation", picked[0]["id"], [p["id"] for p in picked])
+            elif len(picked) == 1:
                 intent = "pedido"
                 product = picked[0]
                 reply = build_offer_reply(product, is_delayed)
