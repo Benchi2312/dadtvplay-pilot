@@ -71,6 +71,23 @@ def _options_reply(products: list[dict], intro: str = "Tienes más de una opció
     return f"{intro}\n{options}\n¿Cuál te gustaría?"
 
 
+# "los 2" / "las dos" / "ambos" / "todos" = quiere TODAS las opciones listadas.
+_SELECT_ALL_RE = re.compile(r"\b(los\s*(2|dos)|las\s*(2|dos)|amb[oa]s|tod[oa]s?|todit[oa]s?)\b")
+
+
+def _is_multi_specific(picked: list[dict], combined: str) -> bool:
+    """True si 'picked' son varios productos concretos de plataformas
+    distintas (ej. "netflix y disney standar", "hbo estándar y disney de
+    15.6 soles"). Solo así armamos un pedido conjunto."""
+    mentioned_platforms = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
+    picked_platforms = {normalize(str(p["platform"])) for p in picked}
+    return (
+        len(picked) > 1
+        and len(mentioned_platforms) >= 2
+        and len(picked_platforms) >= 2
+    )
+
+
 def _multi_order_reply(products: list[dict]) -> str:
     lines = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']:.2f}" for p in products)
     total = sum(float(p["price"]) for p in products)
@@ -214,19 +231,32 @@ async def _flush_after_silence_inner(phone: str):
             reply = build_rejection_reply()
             set_conversation_state(phone, "idle", None)
         else:
-            # ¿El cliente pidió algo distinto mientras confirmamos otro?
-            matched = find_matching_products(combined)
-            picked, all_specific = resolve_selection(combined, matched)
-            if len(picked) > 1:
-                options = _options_reply(picked)
-                intent = "pedido"
-                reply = options
-                set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in picked])
-            elif len(picked) == 1:
-                product = picked[0]
-                intent = "pedido"
-                reply = build_offer_reply(product, is_delayed)
-                set_conversation_state(phone, "awaiting_confirmation", product["id"])
+            # ¿El cliente se refiere a TODAS las opciones del conjunto que le
+            # ofrecimos ("los 2", "ambos")? Lo confirmamos como set.
+            if _SELECT_ALL_RE.search(normalize(combined)):
+                pending_prods = _pending_products(pending_state)
+                if len(pending_prods) > 1:
+                    intent = "pedido"
+                    reply = _multi_order_reply(pending_prods)
+                    set_conversation_state(phone, "awaiting_confirmation", pending_prods[0]["id"], [p["id"] for p in pending_prods])
+            if reply is None:
+                # ¿El cliente pidió algo distinto mientras confirmamos otro?
+                matched = find_matching_products(combined)
+                picked, all_specific = resolve_selection(combined, matched)
+                if len(picked) > 1 and all_specific and _is_multi_specific(picked, combined):
+                    intent = "pedido"
+                    reply = _multi_order_reply(picked)
+                    set_conversation_state(phone, "awaiting_confirmation", picked[0]["id"], [p["id"] for p in picked])
+                elif len(picked) > 1:
+                    options = _options_reply(picked)
+                    intent = "pedido"
+                    reply = options
+                    set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in picked])
+                elif len(picked) == 1:
+                    product = picked[0]
+                    intent = "pedido"
+                    reply = build_offer_reply(product, is_delayed)
+                    set_conversation_state(phone, "awaiting_confirmation", product["id"])
             else:
                 # Sin plataforma nueva: ¿cambió de PLAN de la misma plataforma
                 # que ya estaba confirmando? (ej. "premium" después de "Standar")
@@ -267,12 +297,34 @@ async def _flush_after_silence_inner(phone: str):
         # Solo opciones que siguen activas y con stock (las que se agotaron
         # ya no se ofrecen).
         candidates = [p for p in _pending_products(pending_state) if p.get("active") and (p.get("stock") or 0) > 0]
+        # ¿El cliente RE-NOMBRA plataformas ("quiero disney y hbo" a pesar de
+        # estar en una lista reducida)? Recalcular contra el catálogo completo
+        # para no confirmar por error un conjunto heredado de otro momento.
+        mentioned_kws = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
+        if mentioned_kws:
+            fresh = find_matching_products(combined)
+            if fresh:
+                candidates = fresh
         if not candidates:
             # Las opciones que le mostramos ya no tienen stock / se
             # desactivaron: soltamos el contexto y seguimos con la
             # clasificación genérica de abajo.
             set_conversation_state(phone, "idle", None)
             reply = None
+        elif _SELECT_ALL_RE.search(normalize(combined)):
+            # "los 2" / "ambos" / "todos": quiere TODAS las opciones listadas.
+            unique_platforms = {p["platform"] for p in candidates}
+            if len(unique_platforms) == len(candidates):
+                # Cada opción es de una plataforma distinta -> armar el conjunto.
+                intent = "pedido"
+                reply = _multi_order_reply(candidates)
+                set_conversation_state(phone, "awaiting_confirmation", candidates[0]["id"], [p["id"] for p in candidates])
+            else:
+                # Misma plataforma con varias opciones: "todos" es ambiguo
+                # (¿ambos planes?). Mejor re-listar.
+                intent = "pedido"
+                reply = _options_reply(candidates, "Perfecto, tengo varias opciones para eso 😊:")
+                set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in candidates])
         elif is_real_affirmative(combined):
             # "Sí" sobre una lista ya reducida a productos concretos
             # (cada plataforma aparece una sola vez) = confirmar el conjunto.
@@ -289,15 +341,8 @@ async def _flush_after_silence_inner(phone: str):
                 reply = None
         else:
             picked, all_specific = resolve_selection(combined, candidates)
-            mentioned_platforms = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
-            picked_platforms = {normalize(str(p["platform"])) for p in picked}
 
-            if (
-                len(picked) > 1
-                and all_specific
-                and len(mentioned_platforms) >= 2
-                and len(picked_platforms) >= 2
-            ):
+            if len(picked) > 1 and all_specific and _is_multi_specific(picked, combined):
                 # Pedido concreto de varios productos distintos (ej. "hbo
                 # estándar y disney de 15.6 soles"): confirmamos el conjunto.
                 intent = "pedido"
@@ -384,14 +429,7 @@ async def _flush_after_silence_inner(phone: str):
         if intent == "pedido":
             matched = find_matching_products(combined)
             picked, all_specific = resolve_selection(combined, matched)
-            mentioned_platforms = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
-            picked_platforms = {normalize(str(p["platform"])) for p in picked}
-            if (
-                len(picked) > 1
-                and all_specific
-                and len(mentioned_platforms) >= 2
-                and len(picked_platforms) >= 2
-            ):
+            if len(picked) > 1 and all_specific and _is_multi_specific(picked, combined):
                 # Pedido concreto de varios productos desde el primer mensaje
                 # (ej. "netflix y disney standar"): ofrecemos el conjunto.
                 intent = "pedido"
