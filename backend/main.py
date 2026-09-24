@@ -12,6 +12,7 @@ from store import (
     get_conversation_state,
     set_conversation_state,
     find_matching_products,
+    get_all_available_products,
     resolve_selection,
     get_products_by_ids,
 )
@@ -66,7 +67,7 @@ def _same_platform_products(product: dict | None) -> list[dict]:
 def _options_reply(products: list[dict], intro: str = "Tienes más de una opción disponible 😊:") -> str:
     if not products:
         return f"{intro}\nPor ahora no encuentro opciones con stock. ¿Quieres que te avisemos cuando vuelva a haber?"
-    options = "\n".join(f"- {p['platform']} {p['plan_name']}: S/{p['price']:.2f}" for p in products)
+    options = "\n".join(f"{i + 1}. {p['platform']} {p['plan_name']}: S/{p['price']:.2f}" for i, p in enumerate(products))
     return f"{intro}\n{options}\n¿Cuál te gustaría?"
 
 
@@ -242,19 +243,50 @@ async def _flush_after_silence_inner(phone: str):
                     reply = _options_reply(alt, "De esa plataforma tengo estas opciones 😊:")
                     set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in alt])
                 else:
-                    # Genuinamente ambiguo (ej. "Sii", "sip", emoji suelto).
-                    intent = "pedido"
-                    reply = "Disculpa, ¿eso es un sí? 🙂 Solo necesito que confirmes y te paso los datos del pago."
+                    # Ni plan de la misma plataforma. ¿Mencionó un plan/precio
+                    # de OTRA plataforma ("el de 26", "premium")? Expandimos
+                    # al catálogo completo antes de rendirnos.
+                    all_prods = get_all_available_products()
+                    alt2, _ = resolve_selection(combined, all_prods)
+                    if len(alt2) == 1:
+                        product = alt2[0]
+                        intent = "pedido"
+                        reply = build_offer_reply(product, is_delayed)
+                        set_conversation_state(phone, "awaiting_confirmation", product["id"])
+                    elif len(alt2) > 1:
+                        intent = "pedido"
+                        reply = _options_reply(alt2)
+                        set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in alt2])
+                    else:
+                        # Genuinamente ambiguo (ej. "Sii", "sip", emoji suelto).
+                        intent = "pedido"
+                        reply = "Disculpa, ¿eso es un sí? 🙂 Solo necesito que confirmes y te paso los datos del pago."
 
     # --- Elección entre varias opciones ya ofrecidas (multi-plan o multi-plataforma) ---
     if reply is None and pending_state and pending_state.get("state") == "awaiting_choice" and combined:
-        candidates = _pending_products(pending_state)
+        # Solo opciones que siguen activas y con stock (las que se agotaron
+        # ya no se ofrecen).
+        candidates = [p for p in _pending_products(pending_state) if p.get("active") and (p.get("stock") or 0) > 0]
         if not candidates:
             # Las opciones que le mostramos ya no tienen stock / se
             # desactivaron: soltamos el contexto y seguimos con la
             # clasificación genérica de abajo.
             set_conversation_state(phone, "idle", None)
             reply = None
+        elif is_real_affirmative(combined):
+            # "Sí" sobre una lista ya reducida a productos concretos
+            # (cada plataforma aparece una sola vez) = confirmar el conjunto.
+            unique_platforms = {p["platform"] for p in candidates}
+            if len(candidates) == 1:
+                intent = "pedido"
+                reply = build_offer_reply(candidates[0], is_delayed)
+                set_conversation_state(phone, "awaiting_confirmation", candidates[0]["id"])
+            elif len(unique_platforms) == len(candidates):
+                intent = "pedido"
+                reply = _multi_order_reply(candidates)
+                set_conversation_state(phone, "awaiting_confirmation", candidates[0]["id"], [p["id"] for p in candidates])
+            else:
+                reply = None
         else:
             picked, all_specific = resolve_selection(combined, candidates)
             mentioned_platforms = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
@@ -283,9 +315,11 @@ async def _flush_after_silence_inner(phone: str):
                 set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in picked])
             else:
                 # No eligió ninguna de las opciones mostradas. ¿Pidió otra
-                # plataforma que no estaba en la lista? No lo dejamos atrapado.
-                new_matched = find_matching_products(combined)
-                alt, _ = resolve_selection(combined, new_matched)
+                # plataforma o un plan concreto ("premium", "el de 26") que no
+                # estaba en la lista reducida? Lo resolvemos contra TODO el
+                # catálogo para no dejarlo atrapado.
+                all_prods = get_all_available_products()
+                alt, _ = resolve_selection(combined, all_prods)
                 if len(alt) == 1:
                     intent = "pedido"
                     reply = build_offer_reply(alt[0], is_delayed)
@@ -350,7 +384,20 @@ async def _flush_after_silence_inner(phone: str):
         if intent == "pedido":
             matched = find_matching_products(combined)
             picked, all_specific = resolve_selection(combined, matched)
-            if len(picked) > 1:
+            mentioned_platforms = {kw for kw in KNOWN_PLATFORMS if kw in normalize(combined)}
+            picked_platforms = {normalize(str(p["platform"])) for p in picked}
+            if (
+                len(picked) > 1
+                and all_specific
+                and len(mentioned_platforms) >= 2
+                and len(picked_platforms) >= 2
+            ):
+                # Pedido concreto de varios productos desde el primer mensaje
+                # (ej. "netflix y disney standar"): ofrecemos el conjunto.
+                intent = "pedido"
+                reply = _multi_order_reply(picked)
+                set_conversation_state(phone, "awaiting_confirmation", picked[0]["id"], [p["id"] for p in picked])
+            elif len(picked) > 1:
                 reply = _options_reply(picked)
                 set_conversation_state(phone, "awaiting_choice", None, [p["id"] for p in picked])
             elif len(picked) == 1:

@@ -57,6 +57,15 @@ def get_products_by_ids(ids: list[int]) -> list[dict]:
     return [by_id[i] for i in dict.fromkeys(valid) if i in by_id]
 
 
+def get_all_available_products() -> list[dict]:
+    """Todos los productos activos y con stock, para poder resolver
+    elecciones de solo plan ("premium", "el de 26") aunque el plan no
+    esté en la lista reducida que se le mostró al cliente."""
+    result = supabase.table("products").select("*").eq("active", True).gt("stock", 0).execute()
+    data = result.data if result else []
+    return [p for p in data if p.get("id") is not None]
+
+
 # Patrón de números sueltos ("de 15.6 soles", "26.00", "15.6") para
 # detectar selección por precio.
 _PRICE_RE = re.compile(r"(\d+(?:[.,]\d+)?)")
@@ -94,6 +103,18 @@ def _price_mentioned(price, norm: str) -> bool:
     return False
 
 
+def _plat_of(p) -> str:
+    return normalize(str(p.get("platform", "")))
+
+
+def _specific(p, norm: str, single_platforms: set) -> bool:
+    return (
+        _plan_mentioned(str(p.get("plan_name", "")), norm)
+        or _price_mentioned(p.get("price", 0), norm)
+        or _plat_of(p) in single_platforms
+    )
+
+
 def resolve_selection(text: str, candidates: list[dict]) -> tuple[list[dict], bool]:
     """Dado el texto del cliente y una lista de opciones ya ofrecidas,
     devuelve:
@@ -101,42 +122,70 @@ def resolve_selection(text: str, candidates: list[dict]) -> tuple[list[dict], bo
     - picked: las candidatas que el cliente claramente elige (por
       plataforma y/o plan y/o precio).
     - all_specific: True si TODAS las elegidas fueron nombradas con
-      detalle (plan o precio), no solo por su plataforma. Sirve para
-      distinguir un pedido concreto ("hbo estándar y disney de 15.6
-      soles") de una mención ambigua ("quiero hbo")."""
+      detalle (plan o precio) o su plataforma tiene un único plan.
+      Sirve para distinguir un pedido concreto ("hbo estándar y disney
+      de 15.6 soles") de una mención ambigua ("quiero hbo")."""
     norm = normalize(text)
     if not norm:
         return [], False
 
+    # Plataformas que solo ofrecen un plan: mencionar la plataforma
+    # ya es una elección específica (ej. "netflix" -> uncuento completa).
+    counts: dict[str, int] = {}
+    for p in candidates:
+        counts[_plat_of(p)] = counts.get(_plat_of(p), 0) + 1
+    single_platforms = {plat for plat, c in counts.items() if c == 1}
+
+    def exact(p) -> bool:
+        nplan = normalize(str(p.get("plan_name", "")))
+        return (nplan and nplan in norm) or _price_mentioned(p.get("price", 0), norm)
+
+    # Elección por índice numérico ("el 2", "2") entre las opciones listadas.
+    tail = norm[3:].strip() if norm.startswith("el ") else norm
+    if tail.isdigit() and len(candidates) > 1:
+        idx = int(tail)
+        if 1 <= idx <= len(candidates):
+            return [candidates[idx - 1]], True
+
+    # "el más barato / económico" y "el más caro".
+    if any(w in norm for w in ("barato", "economico", "economica")):
+        prices = [_round2(p["price"]) for p in candidates]
+        cheapest = _round2(min(prices))
+        return [p for p in candidates if _round2(p["price"]) == cheapest], True
+    if any(w in norm for w in ("caro", "carisimo", "carisima")):
+        prices = [_round2(p["price"]) for p in candidates]
+        priciest = _round2(max(prices))
+        return [p for p in candidates if _round2(p["price"]) == priciest], True
+
     mentioned_ids = {
         p["id"]
         for p in candidates
-        if any(kw in norm for kw in KNOWN_PLATFORMS if kw in normalize(str(p.get("platform", ""))))
+        if any(kw in norm for kw in KNOWN_PLATFORMS if kw in _plat_of(p))
     }
 
+    # Sin plataforma mencionada: preferir match exacto de plan (evita el
+    # choque "standar" (Disney) vs "estándar" (Hbo) a tu favor).
     if not mentioned_ids:
-        picked = [
-            p for p in candidates
-            if _plan_mentioned(str(p.get("plan_name", "")), norm) or _price_mentioned(p.get("price", 0), norm)
-        ]
-        return picked, bool(picked)
+        exacts = [p for p in candidates if exact(p)]
+        base = exacts or [p for p in candidates if _specific(p, norm, set())]
+        return base, bool(base)
 
     picked = [p for p in candidates if p["id"] in mentioned_ids]
-    said_detail = any(
-        _plan_mentioned(str(p.get("plan_name", "")), norm) or _price_mentioned(p.get("price", 0), norm)
+
+    # Plataformas mencionadas con varios planes y sin ningún detalle
+    # (plan/precio): quedan ambiguas, así que aún no podemos armar
+    # pedido. Devolvemos TODO el conjunto para que se listen opciones.
+    ambiguous = {
+        _plat_of(p)
         for p in picked
-    )
-    if not said_detail:
+        if counts[_plat_of(p)] > 1 and not any(_specific(q, norm, single_platforms) for q in picked if _plat_of(q) == _plat_of(p))
+    }
+    if ambiguous:
         return picked, False
 
-    narrowed = [
-        p for p in picked
-        if _plan_mentioned(str(p.get("plan_name", "")), norm) or _price_mentioned(p.get("price", 0), norm)
-    ]
+    narrowed = [p for p in picked if _specific(p, norm, single_platforms)]
     if not narrowed:
         return picked, False
-    # Cada elemento de "narrowed" fue incluido por detalle (plan o precio),
-    # así que si hay ≥1 son elecciones específicas.
     return narrowed, True
 
 
