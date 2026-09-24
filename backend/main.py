@@ -153,6 +153,21 @@ async def kapso_webhook(request: Request):
 
 
 async def _flush_after_silence(phone: str):
+    # Red de seguridad: si algo falla (ej. columna faltante en Supabase, red),
+    # logueamos el traceback en Render y respondemos algo en vez de quedarnos
+    # mudos (que es lo que pasa cuando la excepción mata la tarea en silencio).
+    try:
+        await _flush_after_silence_inner(phone)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        try:
+            await _send_whatsapp(phone, "Uy, se me trabó un momento 🙏, te respondo en un segundito.")
+        except Exception:
+            pass
+
+
+async def _flush_after_silence_inner(phone: str):
     try:
         await asyncio.sleep(DEBOUNCE_SECONDS)
     except asyncio.CancelledError:
