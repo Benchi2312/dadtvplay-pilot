@@ -15,9 +15,11 @@ services:
         sync: false
       - key: YAPE_NAME
         sync: false
-      - key: KAPSO_API_KEY
+      - key: WAMUNDO_SECRET
         sync: false
-      - key: KAPSO_PHONE_NUMBER_ID
+      - key: WAMUNDO_ACCOUNT_ID
         sync: false
-      - key: KAPSO_WEBHOOK_SECRET
-        generateValue: true
+      - key: WAMUNDO_HOOK_TOKEN
+        sync: false
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
