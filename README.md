@@ -61,9 +61,20 @@ servicio, `dadtvplay-backend`) y pide las variables de arriba.
 
 ## 5. Configurar WaMundo
 
-Ver **[GUIA_DIEGO.md](GUIA_DIEGO.md)**: pasos en WaMundo, cómo pasar los
-códigos, comprobación previa con `backend/scripts/check_wamundo.py` y una
-tabla de problemas comunes.
+Pasos: agregar la cuenta (videollamada + QR), copiar el **Account Unique ID** y
+crear una **API key** con permiso de enviar WhatsApp y leer chats recibidos.
+Luego crear el Hook (Acciones → Hook, origen WhatsApp, evento "Al recibir")
+apuntando a `https://dadtvplay-backend.onrender.com/webhook/wamundo-hook?token=EL_TOKEN`.
+
+Antes de activar, verificar que `wa.received` traiga los campos necesarios:
+
+```bash
+cd backend
+python scripts/check_wamundo.py
+```
+
+No re-vincular el WhatsApp después de configurar: el Account Unique ID cambia
+y el bot deja de responder.
 
 ## Qué es piloto vs qué falta para producción
 
